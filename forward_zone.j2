@@ -1,0 +1,19 @@
+\$TTL 1D
+@       IN SOA  {{ primary_hostname }}. admin.{{ domain_name }}. (
+                                {{ serial_number }}     ; Serial
+                                1D          ; Refresh
+                                1H          ; Retry
+                                1W          ; Expire
+                                3H )        ; Minimum TTL
+        IN NS   {{ primary_hostname }}.
+        IN NS   {{ secondary_hostname }}.
+{{ primary_hostname }}    IN A    {{ primary_ip }}
+{{ secondary_hostname }}  IN A    {{ secondary_ip }}
+
+; A records for app-test service
+{% for ip in app_test_ips %}
+app-test                IN A    {{ ip }}
+{% endfor %}
+
+; Add any additional records here
+www     IN CNAME @
