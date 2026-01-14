@@ -1,0 +1,11 @@
+\$TTL 1D
+@       IN SOA  {{ primary_hostname }}. admin.{{ domain_name }}. (
+                                {{ serial_number }}     ; Serial
+                                1D          ; Refresh
+                                1H          ; Retry
+                                1W          ; Expire
+                                3H )        ; Minimum TTL
+        IN NS   {{ primary_hostname }}.
+        IN NS   {{ secondary_hostname }}.
+{{ primary_ip.split('.')[3] }}      IN PTR  {{ primary_hostname }}.
+{{ secondary_ip.split('.')[3] }}      IN PTR  {{ secondary_hostname }}.

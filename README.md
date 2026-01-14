@@ -224,6 +224,53 @@ sudo systemctl restart named
 - Consider using views for split-horizon DNS if needed
 - Monitor resource usage: `top`, `htop`, or `systemctl status named`
 
+## Alternative: Ansible Playbook
+
+As an alternative to the bash script, we now provide an Ansible playbook for managing BIND9 DNS server deployments. The Ansible approach offers several advantages:
+
+### Advantages of Ansible Approach
+
+- **Idempotency**: Safe to run multiple times without side effects
+- **Declarative**: Defines desired state rather than procedural steps
+- **Error Handling**: Comprehensive error handling and rollback capabilities
+- **Scalability**: Easy to manage multiple servers simultaneously
+- **Flexibility**: Easy customization through variables and conditionals
+- **Reporting**: Detailed reporting of changes and status
+- **Integration**: Better integration with CI/CD pipelines and automation tools
+
+### Ansible Files Included
+
+- `bind9-setup.yml` - Main Ansible playbook
+- `named.conf.j2` - Template for main BIND configuration
+- `forward_zone.j2` - Template for forward DNS zone
+- `reverse_zone.j2` - Template for reverse DNS zone
+- `inventory.ini` - Sample inventory file
+- `ANSIBLE-README.md` - Detailed documentation for Ansible playbook
+
+### How to Use the Ansible Playbook
+
+1. Install Ansible on your control machine:
+   ```bash
+   pip install ansible
+   ```
+
+2. Update the `inventory.ini` file with your server details:
+   ```ini
+   [dns_servers]
+   # Primary DNS server
+   primary-dns ansible_host=YOUR_PRIMARY_IP ansible_user=root
+
+   # Secondary DNS server
+   secondary-dns ansible_host=YOUR_SECONDARY_IP ansible_user=root
+   ```
+
+3. Run the playbook:
+   ```bash
+   ansible-playbook -i inventory.ini bind9-setup.yml
+   ```
+
+For complete documentation on using the Ansible playbook, see `ANSIBLE-README.md`.
+
 ## Version Information
 
 - **Script Version**: Auto-generated based on date

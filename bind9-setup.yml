@@ -1,0 +1,215 @@
+---
+# Ansible Playbook for BIND9 DNS Server Setup
+# This playbook automates the installation and configuration of BIND9 DNS server
+# with primary and secondary configuration on CentOS systems
+
+- name: Configure BIND9 DNS Server
+  hosts: dns_servers
+  become: yes
+  vars:
+    domain_name: "local.mydomainz.id"
+    primary_ip: "172.30.0.53"
+    secondary_ip: "172.30.0.56"
+    primary_hostname: "ns1.local.mydomainz.id"
+    secondary_hostname: "ns2.local.mydomainz.id"
+    zonefile_dir: "/var/named"
+    bind_config_file: "/etc/named.conf"
+    app_test_ips:
+      - "172.30.0.52"
+      - "172.30.0.53"
+      - "172.30.0.54"
+    serial_number: "{{ '%Y%m%d01' | strftime }}"
+
+  tasks:
+    - name: Verify OS compatibility
+      assert:
+        that:
+          - ansible_distribution in ['CentOS', 'RedHat', 'Rocky']
+        fail_msg: "This playbook is designed for CentOS/RHEL/Rocky Linux"
+        success_msg: "OS compatibility verified"
+
+    - name: Update system packages
+      yum:
+        name: '*'
+        state: latest
+        update_cache: yes
+      register: update_result
+
+    - name: Install BIND9 packages
+      yum:
+        name:
+          - bind
+          - bind-utils
+        state: present
+      notify: enable named service
+
+    - name: Create zone file directory
+      file:
+        path: "{{ zonefile_dir }}"
+        state: directory
+        owner: named
+        group: named
+        mode: '0755'
+
+    - name: Backup original named.conf
+      copy:
+        src: "{{ bind_config_file }}"
+        dest: "{{ bind_config_file }}.backup"
+        remote_src: yes
+        backup: yes
+      ignore_errors: yes
+
+    - name: Configure BIND9 options (common configuration)
+      template:
+        src: named.conf.j2
+        dest: "{{ bind_config_file }}"
+        owner: root
+        group: named
+        mode: '0640'
+      notify: restart named
+
+    - name: Determine server role based on IP
+      set_fact:
+        server_role: "{{ 'primary' if ansible_default_ipv4.address == primary_ip else ('secondary' if ansible_default_ipv4.address == secondary_ip else '') }}"
+      when: server_role is not defined
+
+    - name: Prompt for server role if not primary or secondary
+      pause:
+        prompt: |
+          Current IP ({{ ansible_default_ipv4.address }}) doesn't match primary ({{ primary_ip }}) or secondary ({{ secondary_ip }})
+          Please specify server type: primary or secondary
+      register: server_type_input
+      when: server_role == ""
+
+    - name: Set server role from user input
+      set_fact:
+        server_role: "{{ server_type_input.user_input }}"
+      when: server_role == ""
+
+    - name: Validate server role
+      assert:
+        that:
+          - server_role in ['primary', 'secondary']
+        fail_msg: "Server role must be 'primary' or 'secondary'"
+        success_msg: "Server role validated as {{ server_role }}"
+
+    - name: Configure primary DNS server
+      block:
+        - name: Add primary zone configuration to named.conf
+          lineinfile:
+            path: "{{ bind_config_file }}"
+            line: |
+              // Primary zone configuration
+              zone "{{ domain_name }}" IN {
+                  type master;
+                  file "{{ domain_name }}.zone";
+                  allow-transfer { {{ secondary_ip }}; };
+                  notify yes;
+              };
+
+              // Reverse zone for 172.30.0.x network
+              zone "0.30.172.in-addr.arpa" IN {
+                  type master;
+                  file "{{ domain_name }}.rev";
+                  allow-transfer { {{ secondary_ip }}; };
+                  notify yes;
+              };
+            insertafter: EOF
+          notify: restart named
+
+        - name: Create forward zone file
+          template:
+            src: forward_zone.j2
+            dest: "{{ zonefile_dir }}/{{ domain_name }}.zone"
+            owner: named
+            group: named
+            mode: '0644'
+          notify: reload named
+
+        - name: Create reverse zone file
+          template:
+            src: reverse_zone.j2
+            dest: "{{ zonefile_dir }}/{{ domain_name }}.rev"
+            owner: named
+            group: named
+            mode: '0644'
+          notify: reload named
+      when: server_role == "primary"
+
+    - name: Configure secondary DNS server
+      block:
+        - name: Add secondary zone configuration to named.conf
+          lineinfile:
+            path: "{{ bind_config_file }}"
+            line: |
+              // Secondary zone configuration
+              zone "{{ domain_name }}" IN {
+                  type slave;
+                  masters { {{ primary_ip }}; };
+                  file "slaves/{{ domain_name }}.zone";
+              };
+
+              // Reverse zone for 172.30.0.x network
+              zone "0.30.172.in-addr.arpa" IN {
+                  type slave;
+                  masters { {{ primary_ip }}; };
+                  file "slaves/{{ domain_name }}.rev";
+              };
+            insertafter: EOF
+          notify: restart named
+
+        - name: Create slaves directory
+          file:
+            path: "{{ zonefile_dir }}/slaves"
+            state: directory
+            owner: named
+            group: named
+            mode: '0755'
+      when: server_role == "secondary"
+
+    - name: Validate BIND configuration
+      shell: named-checkconf {{ bind_config_file }}
+      register: config_check
+      failed_when: config_check.rc != 0
+      changed_when: false
+
+    - name: Validate zone file (primary only)
+      shell: named-checkzone {{ domain_name }} {{ zonefile_dir }}/{{ domain_name }}.zone
+      register: zone_check
+      failed_when: zone_check.rc != 0
+      changed_when: false
+      when: server_role == "primary"
+
+    - name: Ensure named service is running and enabled
+      systemd:
+        name: named
+        state: started
+        enabled: yes
+      register: service_result
+
+    - name: Display configuration summary
+      debug:
+        msg:
+          - "DNS Configuration Summary:"
+          - "Domain: {{ domain_name }}"
+          - "Server Role: {{ server_role }}"
+          - "Primary NS: {{ primary_hostname }} ({{ primary_ip }})"
+          - "Secondary NS: {{ secondary_hostname }} ({{ secondary_ip }})"
+          - "A records for app-test: {{ app_test_ips | join(', ') }}"
+          - "Service Status: {{ service_result.status.ActiveState if service_result is defined else 'unknown' }}"
+
+  handlers:
+    - name: restart named
+      systemd:
+        name: named
+        state: restarted
+
+    - name: reload named
+      systemd:
+        name: named
+        state: reloaded
+
+    - name: enable named service
+      systemd:
+        name: named
+        enabled: yes
